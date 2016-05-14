@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+        <title>IERG4230 Project Demo</title>
+        <style>
+        .button, .control {
+            width: 100%;
+            height: 30px;
+            margin-top: 10px;
+            margin-bottom: 10px;
+        }
+        </style>
+    </head>
+    <body>
+      <h1>IERG4230 Project</h1>
+
+    <p>Connection: <span id="connectionState">Off</span></p>
+
+	  <button onclick="do_turn(13, false)" class="button" disabled="true">Turn 13 Off</button><br />
+	   <button onclick="do_turn(13, true)" class="button" disabled="true">Turn 13 On</button><br />
+	   <button onclick="open_connection()" class="control">Open Connection</button><br />
+	   <button onclick="close_connection()" class="control">Close Connection</button><br />
+	   <button onclick="do_nano_led(true)" class="button" disabled="true">Turn Nano LED On</button><br />
+	   <button onclick="do_nano_led(false)" class="button" disabled="true">Turn Nano LED Off</button><br />
+
+    <center><canvas id="mycanvas" width="800" height="400"></canvas></center>
+
+    <p><strong>Project Description:<strong></p>
+    <ul>
+        <li>User discovers remote control web URL from BLE peripheral advertisement packet</li>
+        <li>The web page connects to the remote web server, an WAMP (Web Application Messaging Protocal) server using Web Socket</li>
+        <li>The Arduino YUN is also connected to web server using Web Socket</li>
+        <li>This is a two-way communication and a prototype for <a href="https://google.github.io/physical-web/">Physical Web</a></li>
+    </ul>
+
+      <script>AUTOBAHN_DEBUG = false;</script>
+      <script type="text/javascript" src="smoothie.js"></script>
+      <script src="http://autobahn.s3.amazonaws.com/autobahnjs/latest/autobahn.min.jgz"></script>
+      <script>
+
+      var smoothie = new SmoothieChart({grid: {strokeStyle: 'rgb(125, 0, 0)',
+                                                  fillStyle: 'rgb(60, 0, 0)',
+                                                  lineWidth: 1,
+                                                  millisPerLine: 250,
+                                                  verticalSections: 6},
+                                           minValue: 0,
+                                           maxValue: 100,
+                                           resetBounds: false,
+                                           //interpolation: "line"
+                                           });
+         smoothie.streamTo(document.getElementById("mycanvas"), 1000);
+         var line0 = new TimeSeries();
+
+         var do_reset = null;
+		 var do_turn = null;
+		 var do_nano_led = null;
+         var base_uri = "io.crossbar.examples.yun.myyun.firmata.";
+         // the URL of the WAMP Router (Crossbar.io)
+         var wsuri;
+         var session = null;
+         //if (document.location.origin == "file://") {
+         //   wsuri = "ws://127.0.0.1:8080/ws"; // localhost for development
+         //} else {
+         //   wsuri = (document.location.protocol === "http:" ? "ws:" : "wss:") + "//" +
+         //               document.location.host + "/ws"; // URL of the Crossbar.io instance this is served from
+         //}
+         // the WAMP connection to the Router
+         //
+
+		 wsuri = "wss://demo.crossbar.io/ws";
+
+         var connection = new autobahn.Connection({
+            url: wsuri, // replace with URL of WAMP router if this doesn't serve the file
+            realm: "iot_cookbook"
+         });
+         connection.onopen = function (new_session, details) {
+            console.log("Connected", details);
+            document.getElementById("connectionState").innerHTML = "On";
+            session = new_session;
+            var items = document.getElementsByClassName("button");
+            for (var i = 0; i < items.length; i++) {
+                items[i].disabled = false;
+            }
+
+			session.call(base_uri + "set_mode", [13, "out"]).then(
+				function() {
+					console.log("13 pin mode set");
+				},
+				function(err) {
+					console.log(err);
+				}
+			);
+
+			function turn_led(pin, status) {
+				session.call(base_uri + "digital_write", [pin, status, false]).then(
+					function() {
+						console.log("Already turn " + pin + " to status ", status);
+					},
+					function(err) {
+						console.log(err);
+					}
+				);
+			}
+			do_turn = turn_led;
+
+			function turn_nano_led(status) {
+				if (status) {
+					session.call(base_uri + "sysex_write", [24, 0, 2]).then(
+						function() {
+							console.log("Already turn nano led to status on");
+						},
+						function(err) {
+							console.log(err);
+						}
+					);
+				} else {
+					session.call(base_uri + "sysex_write", [24, 0, 3]).then(
+						function() {
+							console.log("Already turn nano led to status off");
+						},
+						function(err) {
+							console.log(err);
+						}
+					);
+				}
+			}
+			do_nano_led = turn_nano_led;
+            // set mode to watch
+            session.call(base_uri + "set_mode", [1, "watch"]).then(
+              function () {
+                 console.log("ok, pin mode set");
+              },
+              function (err) {
+                 console.log(err);
+              }
+            );
+            // receive changes from analog watched pins
+            function on_analog_changed (args) {
+               var payload = args[1];
+               payload = payload.toFixed(2);
+               line0.append(new Date().getTime(), payload);
+            }
+            session.subscribe(base_uri + "on_analog_changed", on_analog_changed);
+            smoothie.addTimeSeries(line0, {strokeStyle: 'rgb(0, 255, 0)', fillStyle: 'rgba(0, 255, 0, 0.3)', lineWidth: 3});
+            function reset () {
+               session.call(base_uri + "reset");
+            }
+            do_reset = reset;
+
+         };
+         connection.onclose = function (reason, details) {
+            console.log("Connection lost", reason, details);
+            document.getElementById("connectionState").innerHTML = "Off";
+            var items = document.getElementsByClassName("button");
+            for (var i = 0; i < items.length; i++) {
+                items[i].disabled = true;
+            }
+            smoothie.removeTimeSeries(line0);
+            session = null;
+         }
+         var open_connection = function() {
+			connection.open();
+		 }
+
+		 var close_connection = function() {
+			connection.close();
+		 }
+      </script>
+   </body>
+</html>
